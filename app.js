@@ -2,7 +2,7 @@
   "use strict";
 
   // ---------- Config ----------
-  const SCOPES = "user-read-currently-playing playlist-modify-public playlist-modify-private playlist-read-private playlist-read-collaborative";
+  const SCOPES = "user-read-currently-playing user-modify-playback-state playlist-modify-public playlist-modify-private playlist-read-private playlist-read-collaborative";
   const PAD_COLORS = ["#FF6B6B", "#4ECDC4", "#FFD93D", "#A78BFA", "#6BCB77", "#FF8FAB", "#5EA8ED", "#F4977C"];
   const POLL_MS = 5000;
 
@@ -38,7 +38,13 @@
   const pickerStatus = el("picker-status");
   const pickerList = el("picker-list");
 
+  const btnPlayPause = el("btn-playpause");
+  const btnNext = el("btn-next");
+  const btnRemoveCurrent = el("btn-remove-current");
+
   let currentTrackUri = null;
+  let currentIsPlaying = false;
+  let currentPlaylistContextId = null;
   let pollTimer = null;
 
   // ---------- Helpers ----------
@@ -239,28 +245,37 @@
 
       const data = await res.json();
       if (!data || !data.item) { setNowPlaying(null); return; }
-      setNowPlaying(data.item);
+      setNowPlaying(data.item, data.is_playing, data.context);
     } catch {
       // network hiccup, try again next tick
     }
   }
 
-  function setNowPlaying(item) {
+  function setNowPlaying(item, isPlaying, context) {
     if (!item) {
       currentTrackUri = null;
+      currentIsPlaying = false;
+      currentPlaylistContextId = null;
       npStatus.textContent = "NADA SONANDO";
       npTitle.textContent = "—";
       npArtist.textContent = "";
       npDot.classList.remove("live");
       artImg.classList.remove("has-art");
       setPadsEnabled(false);
+      updateControlButtons();
       return;
     }
     currentTrackUri = item.uri;
-    npStatus.textContent = "REPRODUCIENDO";
+    currentIsPlaying = !!isPlaying;
+    currentPlaylistContextId = null;
+    if (context && context.type === "playlist" && context.uri) {
+      const m = context.uri.match(/playlist:([a-zA-Z0-9]+)/);
+      if (m) currentPlaylistContextId = m[1];
+    }
+    npStatus.textContent = currentIsPlaying ? "REPRODUCIENDO" : "EN PAUSA";
     npTitle.textContent = item.name || "—";
     npArtist.textContent = (item.artists || []).map((a) => a.name).join(", ");
-    npDot.classList.add("live");
+    npDot.classList.toggle("live", currentIsPlaying);
     const img = item.album && item.album.images && item.album.images[item.album.images.length - 1];
     if (img) {
       artImg.src = img.url;
@@ -269,6 +284,71 @@
       artImg.classList.remove("has-art");
     }
     setPadsEnabled(true);
+    updateControlButtons();
+  }
+
+  function updateControlButtons() {
+    const hasTrack = !!currentTrackUri;
+    btnPlayPause.disabled = !hasTrack;
+    btnPlayPause.textContent = currentIsPlaying ? "⏸" : "▶";
+    btnNext.disabled = !hasTrack;
+    btnRemoveCurrent.disabled = !hasTrack || !currentPlaylistContextId;
+  }
+
+  async function togglePlayPause() {
+    const token = await ensureFreshToken();
+    if (!token) { showToast("Conecta tu cuenta de Spotify"); return; }
+    const endpoint = currentIsPlaying ? "pause" : "play";
+    try {
+      const res = await fetch(`https://api.spotify.com/v1/me/player/${endpoint}`, {
+        method: "PUT",
+        headers: { Authorization: "Bearer " + token },
+      });
+      if (res.status === 404) { showToast("No hay ningún dispositivo activo"); return; }
+      if (!res.ok && res.status !== 204) { showToast("No se pudo " + (currentIsPlaying ? "pausar" : "reproducir")); return; }
+      currentIsPlaying = !currentIsPlaying;
+      updateControlButtons();
+      setTimeout(pollCurrentlyPlaying, 400);
+    } catch {
+      showToast("Error de red");
+    }
+  }
+
+  async function skipNext() {
+    const token = await ensureFreshToken();
+    if (!token) { showToast("Conecta tu cuenta de Spotify"); return; }
+    try {
+      const res = await fetch("https://api.spotify.com/v1/me/player/next", {
+        method: "POST",
+        headers: { Authorization: "Bearer " + token },
+      });
+      if (res.status === 404) { showToast("No hay ningún dispositivo activo"); return; }
+      if (!res.ok && res.status !== 204) { showToast("No se pudo saltar la canción"); return; }
+      setTimeout(pollCurrentlyPlaying, 500);
+    } catch {
+      showToast("Error de red");
+    }
+  }
+
+  async function removeCurrentFromPlaylist() {
+    if (!currentTrackUri || !currentPlaylistContextId) return;
+    const token = await ensureFreshToken();
+    if (!token) { showToast("Conecta tu cuenta de Spotify"); return; }
+    try {
+      const res = await fetch(`https://api.spotify.com/v1/playlists/${currentPlaylistContextId}/items`, {
+        method: "DELETE",
+        headers: {
+          Authorization: "Bearer " + token,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ items: [{ uri: currentTrackUri }] }),
+      });
+      if (res.status === 403) { showToast("No puedes editar esta playlist"); return; }
+      if (!res.ok) { showToast("No se pudo quitar la canción"); return; }
+      showToast("Canción quitada de esta playlist");
+    } catch {
+      showToast("Error de red al quitar la canción");
+    }
   }
 
   function setPadsEnabled(enabled) {
@@ -293,7 +373,6 @@
     playlists.forEach((pl, i) => {
       const btn = document.createElement("button");
       btn.className = "pad";
-      btn.style.background = PAD_COLORS[i % PAD_COLORS.length];
       btn.innerHTML = `<span>${escapeHtml(pl.name)}</span><span class="pad-check">✓</span>`;
       btn.addEventListener("click", () => assignToPad(pl, btn));
       padGrid.appendChild(btn);
@@ -302,9 +381,12 @@
   }
 
   function escapeHtml(s) {
-    const d = document.createElement("div");
-    d.textContent = s;
-    return d.innerHTML;
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
   }
 
   async function assignToPad(playlist, btnEl) {
@@ -426,10 +508,19 @@
       const already = existingIds.has(pl.id);
       const row = document.createElement("div");
       row.className = "picker-item" + (already ? " already" : "");
-      row.innerHTML = `
-        <input type="checkbox" id="pick-${pl.id}" data-id="${pl.id}" data-name="${escapeHtml(pl.name)}" ${already ? "checked disabled" : ""} />
-        <label for="pick-${pl.id}">${escapeHtml(pl.name)}${already ? " (ya agregada)" : ""}</label>
-      `;
+
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.id = "pick-" + pl.id;
+      checkbox.dataset.id = pl.id;
+      checkbox.dataset.name = pl.name;
+      if (already) { checkbox.checked = true; checkbox.disabled = true; }
+
+      const label = document.createElement("label");
+      label.setAttribute("for", checkbox.id);
+      label.textContent = pl.name + (already ? " (ya agregada)" : "");
+
+      row.append(checkbox, label);
       pickerList.appendChild(row);
     });
   }
@@ -503,13 +594,31 @@
     const row = document.createElement("div");
     row.className = "playlist-row";
     const swatchColor = PAD_COLORS[playlistRows.children.length % PAD_COLORS.length];
-    row.innerHTML = `
-      <span class="swatch" style="background:${swatchColor}"></span>
-      <input type="text" class="pl-name" placeholder="Nombre (ej. Perreo)" value="${escapeHtml(name || "")}" />
-      <input type="text" class="pl-link" placeholder="Link o ID de la playlist" value="${escapeHtml(idOrLink || "")}" />
-      <button class="btn-remove" aria-label="Quitar">×</button>
-    `;
-    row.querySelector(".btn-remove").addEventListener("click", () => row.remove());
+
+    const swatch = document.createElement("span");
+    swatch.className = "swatch";
+    swatch.style.background = swatchColor;
+
+    const nameInput = document.createElement("input");
+    nameInput.type = "text";
+    nameInput.className = "pl-name";
+    nameInput.placeholder = "Nombre (ej. Perreo)";
+    nameInput.value = name || "";
+
+    const linkInput = document.createElement("input");
+    linkInput.type = "text";
+    linkInput.className = "pl-link";
+    linkInput.placeholder = "Link o ID de la playlist";
+    linkInput.value = idOrLink || "";
+
+    const removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.className = "btn-remove";
+    removeBtn.setAttribute("aria-label", "Quitar");
+    removeBtn.textContent = "×";
+    removeBtn.addEventListener("click", () => row.remove());
+
+    row.append(swatch, nameInput, linkInput, removeBtn);
     playlistRows.appendChild(row);
   }
 
@@ -535,6 +644,9 @@
 
   // ---------- Wire up ----------
   el("btn-connect").addEventListener("click", login);
+  btnPlayPause.addEventListener("click", togglePlayPause);
+  btnNext.addEventListener("click", skipNext);
+  btnRemoveCurrent.addEventListener("click", removeCurrentFromPlaylist);
   el("btn-empty-settings").addEventListener("click", openSettings);
   el("btn-settings").addEventListener("click", openSettings);
   el("btn-close-settings").addEventListener("click", closeSettings);
