@@ -37,9 +37,9 @@
       <div id="np-dot"></div>
     </div>
     <div id="np-controls">
-      <button id="btn-playpause" class="ctrl-btn" aria-label="Reproducir o pausar" disabled>▶</button>
-      <button id="btn-next" class="ctrl-btn" aria-label="Siguiente canción" disabled>⏭</button>
-      <button id="btn-remove-current" class="ctrl-btn ctrl-danger" aria-label="Quitar de esta playlist" disabled>🗑</button>
+      <button id="btn-playpause" class="ctrl-btn" aria-label="Reproducir o pausar" disabled><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg></button>
+      <button id="btn-next" class="ctrl-btn" aria-label="Siguiente canción" disabled><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 4 15 12 5 20 5 4"></polygon><line x1="19" y1="5" x2="19" y2="19"></line></svg></button>
+      <button id="btn-remove-current" class="ctrl-btn ctrl-danger" aria-label="Quitar de esta playlist" disabled><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"></path></svg></button>
     </div>
   </header>
 
@@ -83,6 +83,18 @@
     <div class="row-buttons">
       <button id="btn-add-playlist" class="btn btn-small btn-outline">+ Agregar a mano</button>
       <button id="btn-pick-playlists" class="btn btn-small btn-outline">Elegir de Spotify</button>
+    </div>
+
+    <label class="field-label">Automatización</label>
+    <div class="switch-row">
+      <div class="switch-row-text">
+        <div class="switch-row-title">Quitar de la playlist actual al asignar</div>
+        <div class="switch-row-desc">Al tocar un pad, además de saltar a la siguiente canción, quítala de la playlist desde la que se está reproduciendo.</div>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="toggle-remove-on-assign" />
+        <span class="switch-slider"></span>
+      </label>
     </div>
 
     <div class="sheet-actions">

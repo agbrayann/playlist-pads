@@ -302,6 +302,53 @@ input[type="text"] {
   padding: 4px 8px;
 }
 
+.switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 10px 0 4px;
+}
+.switch-row-text { flex: 1; min-width: 0; }
+.switch-row-title { font-size: 14px; font-weight: 600; }
+.switch-row-desc { font-size: 12px; color: var(--text-dim); margin-top: 4px; line-height: 1.4; }
+
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 51px;
+  height: 31px;
+  flex-shrink: 0;
+}
+.switch input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.switch-slider {
+  position: absolute;
+  inset: 0;
+  background: #39383F;
+  border-radius: 999px;
+  transition: background 0.2s ease;
+}
+.switch-slider::before {
+  content: "";
+  position: absolute;
+  height: 27px;
+  width: 27px;
+  left: 2px;
+  top: 2px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform 0.2s ease;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.25);
+}
+.switch input:checked + .switch-slider { background: var(--spotify); }
+.switch input:checked + .switch-slider::before { transform: translateX(20px); }
+.switch input:focus-visible + .switch-slider { box-shadow: 0 0 0 2px var(--amber); }
+
 .sheet-actions {
   display: flex;
   gap: 10px;

@@ -5,6 +5,7 @@
   const SCOPES = "user-read-currently-playing user-modify-playback-state playlist-modify-public playlist-modify-private playlist-read-private playlist-read-collaborative";
   const PAD_COLORS = ["#FF6B6B", "#4ECDC4", "#FFD93D", "#A78BFA", "#6BCB77", "#FF8FAB", "#5EA8ED", "#F4977C"];
   const POLL_MS = 5000;
+  const PAUSE_GRACE_MS = 60000;
 
   const LS = {
     clientId: "pp_client_id",
@@ -14,7 +15,11 @@
     expires: "pp_expires_at",
     verifier: "pp_code_verifier",
     state: "pp_oauth_state",
+    removeOnAssign: "pp_remove_on_assign",
   };
+
+  const ICON_PLAY = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>';
+  const ICON_PAUSE = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>';
 
   // ---------- DOM ----------
   const el = (id) => document.getElementById(id);
@@ -33,6 +38,7 @@
   const inputClientId = el("input-client-id");
   const inputRedirectUri = el("input-redirect-uri");
   const playlistRows = el("playlist-rows");
+  const toggleRemoveOnAssign = el("toggle-remove-on-assign");
 
   const pickerOverlay = el("picker-overlay");
   const pickerStatus = el("picker-status");
@@ -45,6 +51,7 @@
   let currentTrackUri = null;
   let currentIsPlaying = false;
   let currentPlaylistContextId = null;
+  let lastReportedAt = 0;
   let pollTimer = null;
   const playlistTrackCache = {};
 
@@ -97,6 +104,12 @@
   function savePlaylists(arr) { localStorage.setItem(LS.playlists, JSON.stringify(arr)); }
   function loadClientId() { return localStorage.getItem(LS.clientId) || ""; }
   function saveClientId(v) { localStorage.setItem(LS.clientId, v); }
+
+  function loadRemoveOnAssign() {
+    const v = localStorage.getItem(LS.removeOnAssign);
+    return v === null ? true : v === "true";
+  }
+  function saveRemoveOnAssign(v) { localStorage.setItem(LS.removeOnAssign, v ? "true" : "false"); }
 
   function isLoggedIn() {
     return !!localStorage.getItem(LS.refresh);
@@ -234,7 +247,7 @@
       });
 
       if (res.status === 204) {
-        setNowPlaying(null);
+        handleNothingReported();
         return;
       }
       if (res.status === 401) {
@@ -245,11 +258,36 @@
       if (!res.ok) return;
 
       const data = await res.json();
-      if (!data || !data.item) { setNowPlaying(null); return; }
+      if (!data || !data.item) { handleNothingReported(); return; }
+      lastReportedAt = Date.now();
       setNowPlaying(data.item, data.is_playing, data.context);
     } catch {
       // network hiccup, try again next tick
     }
+  }
+
+  // Spotify stops reporting a track shortly after it's paused. Rather than
+  // wiping the "now playing" panel the instant that happens, keep showing
+  // the last known track as paused for a grace window so the UI doesn't
+  // flicker to empty every time the user pauses.
+  function handleNothingReported() {
+    if (currentTrackUri && Date.now() - lastReportedAt < PAUSE_GRACE_MS) {
+      currentIsPlaying = false;
+      updateStatusDisplay();
+      updateControlButtons();
+      return;
+    }
+    setNowPlaying(null);
+  }
+
+  function updateStatusDisplay() {
+    if (!currentTrackUri) {
+      npStatus.textContent = "NADA SONANDO";
+      npDot.classList.remove("live");
+      return;
+    }
+    npStatus.textContent = currentIsPlaying ? "REPRODUCIENDO" : "EN PAUSA";
+    npDot.classList.toggle("live", currentIsPlaying);
   }
 
   function setNowPlaying(item, isPlaying, context) {
@@ -257,10 +295,9 @@
       currentTrackUri = null;
       currentIsPlaying = false;
       currentPlaylistContextId = null;
-      npStatus.textContent = "NADA SONANDO";
+      updateStatusDisplay();
       npTitle.textContent = "—";
       npArtist.textContent = "";
-      npDot.classList.remove("live");
       artImg.classList.remove("has-art");
       setPadsEnabled(false);
       updateControlButtons();
@@ -273,10 +310,9 @@
       const m = context.uri.match(/playlist:([a-zA-Z0-9]+)/);
       if (m) currentPlaylistContextId = m[1];
     }
-    npStatus.textContent = currentIsPlaying ? "REPRODUCIENDO" : "EN PAUSA";
+    updateStatusDisplay();
     npTitle.textContent = item.name || "—";
     npArtist.textContent = (item.artists || []).map((a) => a.name).join(", ");
-    npDot.classList.toggle("live", currentIsPlaying);
     const img = item.album && item.album.images && item.album.images[item.album.images.length - 1];
     if (img) {
       artImg.src = img.url;
@@ -291,7 +327,7 @@
   function updateControlButtons() {
     const hasTrack = !!currentTrackUri;
     btnPlayPause.disabled = !hasTrack;
-    btnPlayPause.textContent = currentIsPlaying ? "⏸" : "▶";
+    btnPlayPause.innerHTML = currentIsPlaying ? ICON_PAUSE : ICON_PLAY;
     btnNext.disabled = !hasTrack;
     btnRemoveCurrent.disabled = !hasTrack || !currentPlaylistContextId;
   }
@@ -308,6 +344,7 @@
       if (res.status === 404) { showToast("No hay ningún dispositivo activo"); return; }
       if (!res.ok && res.status !== 204) { showToast("No se pudo " + (currentIsPlaying ? "pausar" : "reproducir")); return; }
       currentIsPlaying = !currentIsPlaying;
+      updateStatusDisplay();
       updateControlButtons();
       setTimeout(pollCurrentlyPlaying, 400);
     } catch {
@@ -331,26 +368,39 @@
     }
   }
 
-  async function removeCurrentFromPlaylist() {
-    if (!currentTrackUri || !currentPlaylistContextId) return;
+  async function deleteTrackFromPlaylist(playlistId, trackUri) {
     const token = await ensureFreshToken();
-    if (!token) { showToast("Conecta tu cuenta de Spotify"); return; }
+    if (!token) return { ok: false, reason: "auth" };
     try {
-      const res = await fetch(`https://api.spotify.com/v1/playlists/${currentPlaylistContextId}/items`, {
+      const res = await fetch(`https://api.spotify.com/v1/playlists/${playlistId}/items`, {
         method: "DELETE",
         headers: {
           Authorization: "Bearer " + token,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ items: [{ uri: currentTrackUri }] }),
+        body: JSON.stringify({ items: [{ uri: trackUri }] }),
       });
-      if (res.status === 403) { showToast("No puedes editar esta playlist"); return; }
-      if (!res.ok) { showToast("No se pudo quitar la canción"); return; }
-      showToast("Canción quitada — saltando a la siguiente");
-      await skipNext();
+      if (res.status === 403) return { ok: false, reason: "forbidden" };
+      if (!res.ok) return { ok: false, reason: "error" };
+      return { ok: true };
     } catch {
-      showToast("Error de red al quitar la canción");
+      return { ok: false, reason: "network" };
     }
+  }
+
+  async function removeCurrentFromPlaylist() {
+    if (!currentTrackUri || !currentPlaylistContextId) return;
+    const result = await deleteTrackFromPlaylist(currentPlaylistContextId, currentTrackUri);
+    if (!result.ok) {
+      if (result.reason === "auth") showToast("Conecta tu cuenta de Spotify");
+      else if (result.reason === "forbidden") showToast("No puedes editar esta playlist");
+      else if (result.reason === "network") showToast("Error de red al quitar la canción");
+      else showToast("No se pudo quitar la canción");
+      return;
+    }
+    if (playlistTrackCache[currentPlaylistContextId]) playlistTrackCache[currentPlaylistContextId].delete(currentTrackUri);
+    showToast("Canción quitada — saltando a la siguiente");
+    await skipNext();
   }
 
   function setPadsEnabled(enabled) {
@@ -425,11 +475,14 @@
       showToast("No hay ninguna canción sonando ahorita");
       return;
     }
+    const trackUri = currentTrackUri;
+    const contextId = currentPlaylistContextId;
+
     const token = await ensureFreshToken();
     if (!token) { showToast("Conecta tu cuenta de Spotify"); updateAuthUI(); return; }
 
     const existing = await getPlaylistTrackUris(playlist.id);
-    if (existing && existing.has(currentTrackUri)) {
+    if (existing && existing.has(trackUri)) {
       showToast(`Ya está en ${playlist.name}`);
       return;
     }
@@ -441,15 +494,22 @@
           Authorization: "Bearer " + token,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ uris: [currentTrackUri] }),
+        body: JSON.stringify({ uris: [trackUri] }),
       });
 
       if (res.status === 201) {
-        if (playlistTrackCache[playlist.id]) playlistTrackCache[playlist.id].add(currentTrackUri);
+        if (playlistTrackCache[playlist.id]) playlistTrackCache[playlist.id].add(trackUri);
         btnEl.classList.remove("flash");
         void btnEl.offsetWidth;
         btnEl.classList.add("flash");
         showToast(`Agregada a ${playlist.name}`);
+
+        if (loadRemoveOnAssign() && contextId && contextId !== playlist.id) {
+          const removeResult = await deleteTrackFromPlaylist(contextId, trackUri);
+          if (removeResult.ok && playlistTrackCache[contextId]) playlistTrackCache[contextId].delete(trackUri);
+        }
+
+        await skipNext();
         return;
       }
 
@@ -618,6 +678,7 @@
     inputClientId.value = loadClientId();
     inputRedirectUri.value = getRedirectUri();
     renderPlaylistRows(loadPlaylists());
+    toggleRemoveOnAssign.checked = loadRemoveOnAssign();
     settingsOverlay.classList.remove("hidden");
   }
   function closeSettings() { settingsOverlay.classList.add("hidden"); }
@@ -694,6 +755,12 @@
   el("btn-picker-cancel").addEventListener("click", closePicker);
   pickerOverlay.addEventListener("click", (e) => { if (e.target === pickerOverlay) closePicker(); });
   el("btn-save-settings").addEventListener("click", saveSettingsFromForm);
+  toggleRemoveOnAssign.addEventListener("change", () => {
+    saveRemoveOnAssign(toggleRemoveOnAssign.checked);
+    showToast(toggleRemoveOnAssign.checked
+      ? "Activado: quitar de la playlist actual al asignar"
+      : "Desactivado: quitar de la playlist actual al asignar");
+  });
   el("btn-logout").addEventListener("click", () => { closeSettings(); logout(); });
   el("btn-copy-redirect").addEventListener("click", async () => {
     try {
