@@ -285,6 +285,59 @@ input[type="text"] {
 
 #btn-close-settings { display: block; margin: 10px auto 0; }
 
+.row-buttons {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+.row-buttons .btn { flex: 1; }
+
+/* Playlist picker sheet (shares look with settings sheet) */
+#picker-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.55);
+  display: flex;
+  align-items: flex-end;
+  z-index: 25;
+}
+#picker-sheet {
+  background: var(--panel);
+  width: 100%;
+  max-height: 86vh;
+  overflow-y: auto;
+  border-radius: 24px 24px 0 0;
+  padding: 10px 20px calc(24px + var(--safe-bottom));
+}
+#picker-sheet h2 { font-size: 18px; margin: 0 0 10px; }
+
+#picker-status { color: var(--text-dim); font-size: 13px; margin-bottom: 8px; }
+
+#picker-list { max-height: 46vh; overflow-y: auto; }
+
+.picker-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 2px;
+  border-bottom: 1px solid var(--panel-2);
+}
+.picker-item input[type="checkbox"] {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  accent-color: var(--amber);
+}
+.picker-item label {
+  font-size: 14px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.picker-item.already label { color: var(--text-dim); }
+
 /* Toast */
 #toast {
   position: fixed;
