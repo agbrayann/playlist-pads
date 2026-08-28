@@ -391,6 +391,34 @@
       .replace(/'/g, "&#39;");
   }
 
+    async function getPlaylistTrackUris(playlistId) {
+    if (playlistTrackCache[playlistId]) return playlistTrackCache[playlistId];
+
+    const token = await ensureFreshToken();
+    if (!token) return null;
+
+    const uris = new Set();
+    let url = `https://api.spotify.com/v1/playlists/${playlistId}/items?limit=50`;
+
+    try {
+      while (url) {
+        const res = await fetch(url, { headers: { Authorization: "Bearer " + token } });
+        if (!res.ok) return null;
+        const data = await res.json();
+        (data.items || []).forEach((entry) => {
+          const uri = (entry.item && entry.item.uri) || (entry.track && entry.track.uri);
+          if (uri) uris.add(uri);
+        });
+        url = data.next || null;
+      }
+    } catch {
+      return null;
+    }
+
+    playlistTrackCache[playlistId] = uris;
+    return uris;
+  }
+
   async function assignToPad(playlist, btnEl) {
     if (!currentTrackUri) {
       showToast("No hay ninguna canción sonando ahorita");
@@ -398,6 +426,12 @@
     }
     const token = await ensureFreshToken();
     if (!token) { showToast("Conecta tu cuenta de Spotify"); updateAuthUI(); return; }
+
+    const existing = await getPlaylistTrackUris(playlist.id);
+    if (existing && existing.has(currentTrackUri)) {
+      showToast(`Ya está en ${playlist.name}`);
+      return;
+    }
 
     try {
       const res = await fetch(`https://api.spotify.com/v1/playlists/${playlist.id}/items`, {
@@ -409,12 +443,13 @@
         body: JSON.stringify({ uris: [currentTrackUri] }),
       });
 
-      if (res.status === 201) {
-        btnEl.classList.remove("flash");
-        void btnEl.offsetWidth;
-        btnEl.classList.add("flash");
-        showToast(`Agregada a ${playlist.name}`);
-        return;
+        if (res.status === 201) {
+          if (playlistTrackCache[playlist.id]) playlistTrackCache[playlist.id].add(currentTrackUri);
+          btnEl.classList.remove("flash");
+          void btnEl.offsetWidth;
+          btnEl.classList.add("flash");
+          showToast(`Agregada a ${playlist.name}`);
+          return;
       }
 
       if (res.status === 401) {
