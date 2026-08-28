@@ -375,6 +375,7 @@
     playlists.forEach((pl, i) => {
       const btn = document.createElement("button");
       btn.className = "pad";
+      btn.style.background = PAD_COLORS[i % PAD_COLORS.length];
       btn.innerHTML = `<span>${escapeHtml(pl.name)}</span><span class="pad-check">✓</span>`;
       btn.addEventListener("click", () => assignToPad(pl, btn));
       padGrid.appendChild(btn);
@@ -391,7 +392,7 @@
       .replace(/'/g, "&#39;");
   }
 
-    async function getPlaylistTrackUris(playlistId) {
+  async function getPlaylistTrackUris(playlistId) {
     if (playlistTrackCache[playlistId]) return playlistTrackCache[playlistId];
 
     const token = await ensureFreshToken();
@@ -443,13 +444,13 @@
         body: JSON.stringify({ uris: [currentTrackUri] }),
       });
 
-        if (res.status === 201) {
-          if (playlistTrackCache[playlist.id]) playlistTrackCache[playlist.id].add(currentTrackUri);
-          btnEl.classList.remove("flash");
-          void btnEl.offsetWidth;
-          btnEl.classList.add("flash");
-          showToast(`Agregada a ${playlist.name}`);
-          return;
+      if (res.status === 201) {
+        if (playlistTrackCache[playlist.id]) playlistTrackCache[playlist.id].add(currentTrackUri);
+        btnEl.classList.remove("flash");
+        void btnEl.offsetWidth;
+        btnEl.classList.add("flash");
+        showToast(`Agregada a ${playlist.name}`);
+        return;
       }
 
       if (res.status === 401) {
