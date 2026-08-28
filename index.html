@@ -73,6 +73,76 @@
 
     <label class="field-label">Tus playlists</label>
     <div id="playlist-rows"></div>
+    <div class="row-buttons">
+      <button id="btn-add-playlist" class="btn btn-small btn-outline">+ Agregar a mano</button>
+      <button id="btn-pick-playlists" class="btn btn-small btn-outline">Elegir de Spotify</button>
+    </div>
+
+    <div class="sheet-actions">
+      <button id="btn-save-settings" class="btn btn-primary">Guardar</button>
+      <button id="btn-logout" class="btn btn-text">Cerrar sesión</button>
+    </div>
+    <button id="btn-close-settings" class="btn btn-text">Cerrar</button>
+  </div>
+</div>
+
+<!-- Playlist picker sheet -->
+<div id="picker-overlay" class="hidden">
+  <div id="picker-sheet">
+    <div class="sheet-handle"></div>
+    <h2>Elige tus playlists</h2>
+    <div id="picker-status">Cargando tus playlists…</div>
+    <div id="picker-list"></div>
+    <div class="sheet-actions">
+      <button id="btn-picker-confirm" class="btn btn-primary">Usar seleccionadas</button>
+      <button id="btn-picker-cancel" class="btn btn-text">Cancelar</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script src="app.js"></script>
+</body>
+</html>  </header>
+
+  <!-- Connect CTA (shown when not authenticated) -->
+  <div id="connect-screen" class="screen hidden">
+    <p class="connect-copy">Conecta tu cuenta de Spotify para empezar a clasificar lo que estás escuchando.</p>
+    <button id="btn-connect" class="btn btn-spotify">Conectar con Spotify</button>
+  </div>
+
+  <!-- Empty state (authenticated but no playlists configured) -->
+  <div id="empty-screen" class="screen hidden">
+    <p class="connect-copy">Todavía no tienes playlists configuradas.</p>
+    <button id="btn-empty-settings" class="btn btn-primary">Agregar playlists</button>
+  </div>
+
+  <!-- Pad grid -->
+  <main id="pad-grid" class="hidden"></main>
+
+  <!-- Settings trigger -->
+  <button id="btn-settings" aria-label="Ajustes">⚙</button>
+
+</div>
+
+<!-- Settings sheet -->
+<div id="settings-overlay" class="hidden">
+  <div id="settings-sheet">
+    <div class="sheet-handle"></div>
+    <h2>Ajustes</h2>
+
+    <label class="field-label" for="input-client-id">Spotify Client ID</label>
+    <input id="input-client-id" type="text" placeholder="Pégalo desde developer.spotify.com" autocapitalize="off" autocorrect="off" spellcheck="false" />
+
+    <label class="field-label">Redirect URI (pégala en el dashboard de Spotify)</label>
+    <div class="row-copy">
+      <input id="input-redirect-uri" type="text" readonly />
+      <button id="btn-copy-redirect" class="btn btn-small">Copiar</button>
+    </div>
+
+    <label class="field-label">Tus playlists</label>
+    <div id="playlist-rows"></div>
     <button id="btn-add-playlist" class="btn btn-small btn-outline">+ Agregar playlist</button>
 
     <div class="sheet-actions">
