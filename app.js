@@ -2,7 +2,7 @@
   "use strict";
 
   // ---------- Config ----------
-  const SCOPES = "user-read-currently-playing playlist-modify-public playlist-modify-private";
+  const SCOPES = "user-read-currently-playing playlist-modify-public playlist-modify-private playlist-read-private playlist-read-collaborative";
   const PAD_COLORS = ["#FF6B6B", "#4ECDC4", "#FFD93D", "#A78BFA", "#6BCB77", "#FF8FAB", "#5EA8ED", "#F4977C"];
   const POLL_MS = 5000;
 
@@ -33,6 +33,10 @@
   const inputClientId = el("input-client-id");
   const inputRedirectUri = el("input-redirect-uri");
   const playlistRows = el("playlist-rows");
+
+  const pickerOverlay = el("picker-overlay");
+  const pickerStatus = el("picker-status");
+  const pickerList = el("picker-list");
 
   let currentTrackUri = null;
   let pollTimer = null;
@@ -343,6 +347,87 @@
     }
   }
 
+  // ---------- Fetch the user's own Spotify playlists (for the picker) ----------
+  async function fetchMyPlaylists() {
+    const token = await ensureFreshToken();
+    if (!token) return { items: null, error: "not_logged_in" };
+
+    let items = [];
+    let url = "https://api.spotify.com/v1/me/playlists?limit=50";
+
+    try {
+      while (url) {
+        const res = await fetch(url, { headers: { Authorization: "Bearer " + token } });
+        if (!res.ok) return { items: null, error: "http_" + res.status };
+        const data = await res.json();
+        items = items.concat((data.items || []).filter(Boolean).map((p) => ({ id: p.id, name: p.name })));
+        url = data.next || null;
+      }
+      return { items, error: null };
+    } catch {
+      return { items: null, error: "network" };
+    }
+  }
+
+  // ---------- Playlist picker ----------
+  function currentRowIds() {
+    return Array.from(playlistRows.querySelectorAll(".playlist-row .pl-link"))
+      .map((input) => extractPlaylistId(input.value))
+      .filter(Boolean);
+  }
+
+  async function openPicker() {
+    pickerOverlay.classList.remove("hidden");
+    pickerList.innerHTML = "";
+    pickerStatus.textContent = "Cargando tus playlists…";
+
+    const { items, error } = await fetchMyPlaylists();
+
+    if (error) {
+      pickerStatus.textContent =
+        error === "not_logged_in"
+          ? "Conecta tu cuenta primero."
+          : "No se pudo cargar tu lista. Si acabas de actualizar la app, cierra sesión y vuelve a conectar (se agregó un permiso nuevo).";
+      return;
+    }
+    if (!items.length) {
+      pickerStatus.textContent = "No encontramos playlists en tu cuenta.";
+      return;
+    }
+
+    pickerStatus.textContent = `${items.length} playlists encontradas — marca las que quieras usar:`;
+    const existingIds = new Set(currentRowIds());
+
+    items.forEach((pl) => {
+      const already = existingIds.has(pl.id);
+      const row = document.createElement("div");
+      row.className = "picker-item" + (already ? " already" : "");
+      row.innerHTML = `
+        <input type="checkbox" id="pick-${pl.id}" data-id="${pl.id}" data-name="${escapeHtml(pl.name)}" ${already ? "checked disabled" : ""} />
+        <label for="pick-${pl.id}">${escapeHtml(pl.name)}${already ? " (ya agregada)" : ""}</label>
+      `;
+      pickerList.appendChild(row);
+    });
+  }
+
+  function closePicker() { pickerOverlay.classList.add("hidden"); }
+
+  function confirmPicker() {
+    const checked = Array.from(pickerList.querySelectorAll('input[type="checkbox"]:checked:not(:disabled)'));
+    if (checked.length === 0) { closePicker(); return; }
+
+    // Remove any fully-blank manual rows before appending real picks
+    Array.from(playlistRows.querySelectorAll(".playlist-row")).forEach((row) => {
+      const name = row.querySelector(".pl-name").value.trim();
+      const link = row.querySelector(".pl-link").value.trim();
+      if (!name && !link) row.remove();
+    });
+
+    checked.forEach((cb) => addPlaylistRow(cb.dataset.name, cb.dataset.id, playlistRows.children.length));
+    closePicker();
+    showToast(`${checked.length} playlist(s) agregada(s) — dale Guardar para confirmar`);
+  }
+
   // ---------- Auth UI ----------
   function updateAuthUI() {
     if (isLoggedIn()) {
@@ -430,6 +515,10 @@
   el("btn-settings").addEventListener("click", openSettings);
   el("btn-close-settings").addEventListener("click", closeSettings);
   el("btn-add-playlist").addEventListener("click", () => addPlaylistRow("", "", playlistRows.children.length));
+  el("btn-pick-playlists").addEventListener("click", openPicker);
+  el("btn-picker-confirm").addEventListener("click", confirmPicker);
+  el("btn-picker-cancel").addEventListener("click", closePicker);
+  pickerOverlay.addEventListener("click", (e) => { if (e.target === pickerOverlay) closePicker(); });
   el("btn-save-settings").addEventListener("click", saveSettingsFromForm);
   el("btn-logout").addEventListener("click", () => { closeSettings(); logout(); });
   el("btn-copy-redirect").addEventListener("click", async () => {
