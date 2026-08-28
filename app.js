@@ -345,7 +345,8 @@
       });
       if (res.status === 403) { showToast("No puedes editar esta playlist"); return; }
       if (!res.ok) { showToast("No se pudo quitar la canción"); return; }
-      showToast("Canción quitada de esta playlist");
+      showToast("Canción quitada — saltando a la siguiente");
+      await skipNext();
     } catch {
       showToast("Error de red al quitar la canción");
     }
