@@ -46,6 +46,7 @@
   let currentIsPlaying = false;
   let currentPlaylistContextId = null;
   let pollTimer = null;
+  const playlistTrackCache = {};
 
   // ---------- Helpers ----------
   function getRedirectUri() {
