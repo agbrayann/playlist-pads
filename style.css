@@ -42,9 +42,15 @@ html, body {
 /* Now playing */
 #now-playing {
   display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+#np-main {
+  display: flex;
   align-items: center;
   gap: 14px;
-  flex-shrink: 0;
 }
 
 #art-wrap {
@@ -109,6 +115,27 @@ html, body {
   100% { box-shadow: 0 0 0 0 rgba(29, 185, 84, 0); }
 }
 
+/* Playback controls row */
+#np-controls {
+  display: flex;
+  gap: 10px;
+}
+.ctrl-btn {
+  flex: 1;
+  height: 40px;
+  border: none;
+  border-radius: 12px;
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 15px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.ctrl-btn:active { transform: scale(0.93); }
+.ctrl-btn:disabled { opacity: 0.3; }
+.ctrl-btn.ctrl-danger { color: var(--danger); }
+
 /* Screens */
 .screen {
   flex: 1;
@@ -124,13 +151,11 @@ html, body {
 
 .hidden { display: none !important; }
 
-/* Pad grid */
+/* Pad list — minimal, dark, text only */
 #pad-grid {
   flex: 1;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-  align-content: start;
+  display: flex;
+  flex-direction: column;
   overflow-y: auto;
   padding-bottom: 8px;
 }
@@ -138,43 +163,39 @@ html, body {
 .pad {
   position: relative;
   border: none;
-  border-radius: var(--radius-md);
-  min-height: 104px;
-  padding: 14px;
+  border-top: 1px solid var(--panel-2);
+  background: transparent;
+  min-height: 60px;
+  padding: 0 2px;
   display: flex;
-  align-items: flex-end;
-  font-family: 'Archivo Black', 'Inter', sans-serif;
-  font-size: 15px;
-  text-transform: uppercase;
-  letter-spacing: 0.01em;
-  color: rgba(0,0,0,0.82);
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-family: 'Inter', sans-serif;
+  font-weight: 600;
+  font-size: 16px;
+  color: var(--text);
   text-align: left;
-  line-height: 1.15;
-  transition: transform 0.08s ease;
-  overflow: hidden;
+  transition: background-color 0.15s ease;
 }
-.pad:active { transform: scale(0.94); }
+.pad:last-child { border-bottom: 1px solid var(--panel-2); }
+.pad:active { background-color: var(--panel); }
 .pad.disabled { opacity: 0.35; }
 
 .pad-check {
-  position: absolute;
-  inset: 0;
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  justify-content: center;
-  font-size: 34px;
-  background: rgba(0,0,0,0.28);
+  font-size: 17px;
+  color: var(--amber);
   opacity: 0;
-  color: #fff;
-  pointer-events: none;
 }
 .pad.flash .pad-check {
-  animation: flashcheck 0.6s ease forwards;
+  animation: flashcheck 0.9s ease forwards;
 }
 @keyframes flashcheck {
-  0% { opacity: 0; transform: scale(0.6); }
-  25% { opacity: 1; transform: scale(1); }
-  80% { opacity: 1; }
+  0% { opacity: 0; transform: translateX(6px); }
+  20% { opacity: 1; transform: translateX(0); }
+  75% { opacity: 1; }
   100% { opacity: 0; }
 }
 
