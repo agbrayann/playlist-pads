@@ -348,11 +348,28 @@
   }
 
   // ---------- Fetch the user's own Spotify playlists (for the picker) ----------
+  async function fetchMyProfileId() {
+    const token = await ensureFreshToken();
+    if (!token) return null;
+    try {
+      const res = await fetch("https://api.spotify.com/v1/me", {
+        headers: { Authorization: "Bearer " + token },
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      return data.id || null;
+    } catch {
+      return null;
+    }
+  }
+
   async function fetchMyPlaylists() {
     const token = await ensureFreshToken();
     if (!token) return { items: null, error: "not_logged_in" };
 
-    let items = [];
+    const myId = await fetchMyProfileId();
+
+    let raw = [];
     let url = "https://api.spotify.com/v1/me/playlists?limit=50";
 
     try {
@@ -360,9 +377,16 @@
         const res = await fetch(url, { headers: { Authorization: "Bearer " + token } });
         if (!res.ok) return { items: null, error: "http_" + res.status };
         const data = await res.json();
-        items = items.concat((data.items || []).filter(Boolean).map((p) => ({ id: p.id, name: p.name })));
+        raw = raw.concat((data.items || []).filter(Boolean));
         url = data.next || null;
       }
+      // Only playlists you can actually add tracks to: ones you own, or
+      // collaborative ones — this also filters out the dozens of
+      // Spotify-generated playlists (Discover Weekly, Daily Mix, etc.)
+      // that GET /me/playlists includes just because you follow them.
+      const items = raw
+        .filter((p) => p.collaborative || (myId && p.owner && p.owner.id === myId))
+        .map((p) => ({ id: p.id, name: p.name }));
       return { items, error: null };
     } catch {
       return { items: null, error: "network" };
@@ -391,7 +415,7 @@
       return;
     }
     if (!items.length) {
-      pickerStatus.textContent = "No encontramos playlists en tu cuenta.";
+      pickerStatus.textContent = "No encontramos playlists propias o colaborativas en tu cuenta.";
       return;
     }
 
