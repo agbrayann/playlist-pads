@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+<title>Playlist Pads</title>
+
+<link rel="manifest" href="manifest.json" />
+<meta name="theme-color" content="#16151A" />
+<link rel="apple-touch-icon" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAALQAAAC0CAYAAAA9zQYyAAAEHElEQVR4nO3d3W3jVhSFUcpIC8kAKSXdTCF5SiHpZkoxELuI5CHQQKORxH/eezbXKkC8Bj4fH4uEdBk68Nuvv//b+gys9/H5fml9hiYHEPA5tAj8sAuK+NyOinvXi4iYR/aMe5cXFjJT7BH229YvKGam2qOVzX5DhMwaW03rTSa0mFlrq4ZW/VYImT2smdaLJ7SY2cuathYFLWb2trSx2UGLmaMsaW1W0GLmaHObmxy0mGllTnuTghYzrU1tcDRoMdOLKS1ufusbWnoZtOlMb8aafBq0mOnVqzatHER5GLTpTO+eNfpT0GKmiketWjmI8kPQpjPV3DdrQhNF0ET5HrR1g6pu2zWhiSJoorwNg3WD+q4Nm9BEETRRBE2Ui/2ZJCY0UQRNFEETRdBEETRRBE0UQRNF0EQRNFEETRRBE0XQRBE0UQRNFEET5ZfWB1jrn7//aH2El758/db6CKdS9gH/3kO+J+xjlFw5qsU8DDXPXFG5oCuHUfnsVZQLGl4pFXTChEv4GXpWKmgYI2iiCJoopYJOeC834WfoWamgYUy5oCtPuMpnr6Jc0MNQM4yKZ66o7LMcV72/ryvkY5UPGm6VXDngGUETRdBEETRRBE0UQRNF0EQRNFEETRRBE0XQRBE0UQRNFEETRdBEETRRBE0UQRNF0EQRNFEETRRBEyXhS4P+2uu1v3z99uder80+yn4ux54h3xN2HSVXjiNjbnE9lisXdKu4RF1DuaDhlVJBt56Sra/PuFJBwxhBE0XQRCkVdOv3g1tfn3GlgoYx5YJuNSVN5xrKBT0Mx8cl5jrKPstx5eEkbpUPGm6VXDngGUETRdBEETRRBE0UQRNF0EQRNFEETRRBE0XQRBE0UQRNFEETRdBEETRRBE0UQRNF0EQRNFEETRTfsbKSjzroS9mPMWgd8j1h96HkytFbzMPQ55nOqFzQPYfT89nOolzQ8EqpoCtMwApnTFYqaBgjaKIImiiCJkqpoCvcvKhwxmSlgoYx5YLueQL2fLazKBf0MPQZTo9nOqOyDyddtb6RIeS+lA8abpVcOeAZQRNF0EQRNFEETRRBE0XQRBE0UQRNlLePz/dL60PAFj4+3y8mNFEETRRBE+VtGP7fPVofBNa4NmxCE0XQRPketLWDqm7bNaGJImii/BC0tYNq7ps1oYnyU9CmNFU8avXhhBY1vXvWqJWDKE+DNqXp1as2X05oUdObsSatHEQZDdqUphdTWpw0oUVNa1MbnLxyiJpW5rQ3a4cWNUeb29zsfwpFzVGWtLboXQ5Rs7eljS1+207U7GVNW5tE6Wst2MIWQ3KTGyumNWtt1dDmIZrWzLH1MNz81rdpzVR7tLJrfKY1j+w59A6bpuI+t6P+cjdZD8R9Di3Wzy72XYFn6OH/p/8AoOkqhxBB72EAAAAASUVORK5CYII=" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Pads" />
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Space+Mono:wght@400;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<div id="app">
+
+  <!-- Now playing "LCD" panel -->
+  <header id="now-playing" class="panel">
+    <div id="np-main">
+      <div id="art-wrap">
+        <img id="art" alt="" />
+        <div id="art-placeholder">♪</div>
+      </div>
+      <div id="np-text">
+        <div id="np-status">SIN CONEXIÓN</div>
+        <div id="np-title">—</div>
+        <div id="np-artist"></div>
+      </div>
+      <div id="np-dot"></div>
+    </div>
+    <div id="np-controls">
+      <button id="btn-playpause" class="ctrl-btn" aria-label="Reproducir o pausar" disabled>▶</button>
+      <button id="btn-next" class="ctrl-btn" aria-label="Siguiente canción" disabled>⏭</button>
+      <button id="btn-remove-current" class="ctrl-btn ctrl-danger" aria-label="Quitar de esta playlist" disabled>🗑</button>
+    </div>
+  </header>
+
+  <!-- Connect CTA (shown when not authenticated) -->
+  <div id="connect-screen" class="screen hidden">
+    <p class="connect-copy">Conecta tu cuenta de Spotify para empezar a clasificar lo que estás escuchando.</p>
+    <button id="btn-connect" class="btn btn-spotify">Conectar con Spotify</button>
+  </div>
+
+  <!-- Empty state (authenticated but no playlists configured) -->
+  <div id="empty-screen" class="screen hidden">
+    <p class="connect-copy">Todavía no tienes playlists configuradas.</p>
+    <button id="btn-empty-settings" class="btn btn-primary">Agregar playlists</button>
+  </div>
+
+  <!-- Pad grid -->
+  <main id="pad-grid" class="hidden"></main>
+
+  <!-- Settings trigger -->
+  <button id="btn-settings" aria-label="Ajustes">⚙</button>
+
+</div>
+
+<!-- Settings sheet -->
+<div id="settings-overlay" class="hidden">
+  <div id="settings-sheet">
+    <div class="sheet-handle"></div>
+    <h2>Ajustes</h2>
+
+    <label class="field-label" for="input-client-id">Spotify Client ID</label>
+    <input id="input-client-id" type="text" placeholder="Pégalo desde developer.spotify.com" autocapitalize="off" autocorrect="off" spellcheck="false" />
+
+    <label class="field-label">Redirect URI (pégala en el dashboard de Spotify)</label>
+    <div class="row-copy">
+      <input id="input-redirect-uri" type="text" readonly />
+      <button id="btn-copy-redirect" class="btn btn-small">Copiar</button>
+    </div>
+
+    <label class="field-label">Tus playlists</label>
+    <div id="playlist-rows"></div>
+    <div class="row-buttons">
+      <button id="btn-add-playlist" class="btn btn-small btn-outline">+ Agregar a mano</button>
+      <button id="btn-pick-playlists" class="btn btn-small btn-outline">Elegir de Spotify</button>
+    </div>
+
+    <div class="sheet-actions">
+      <button id="btn-save-settings" class="btn btn-primary">Guardar</button>
+      <button id="btn-logout" class="btn btn-text">Cerrar sesión</button>
+    </div>
+    <button id="btn-close-settings" class="btn btn-text">Cerrar</button>
+  </div>
+</div>
+
+<!-- Playlist picker sheet -->
+<div id="picker-overlay" class="hidden">
+  <div id="picker-sheet">
+    <div class="sheet-handle"></div>
+    <h2>Elige tus playlists</h2>
+    <div id="picker-status">Cargando tus playlists…</div>
+    <div id="picker-list"></div>
+    <div class="sheet-actions">
+      <button id="btn-picker-confirm" class="btn btn-primary">Usar seleccionadas</button>
+      <button id="btn-picker-cancel" class="btn btn-text">Cancelar</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
