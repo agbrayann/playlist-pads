@@ -44,6 +44,7 @@
   const pickerStatus = el("picker-status");
   const pickerList = el("picker-list");
 
+  const btnPrev = el("btn-prev");
   const btnPlayPause = el("btn-playpause");
   const btnNext = el("btn-next");
   const btnRemoveCurrent = el("btn-remove-current");
@@ -301,6 +302,7 @@
       artImg.classList.remove("has-art");
       setPadsEnabled(false);
       updateControlButtons();
+      updatePadIndicators();
       return;
     }
     currentTrackUri = item.uri;
@@ -322,10 +324,12 @@
     }
     setPadsEnabled(true);
     updateControlButtons();
+    updatePadIndicators();
   }
 
   function updateControlButtons() {
     const hasTrack = !!currentTrackUri;
+    btnPrev.disabled = !hasTrack;
     btnPlayPause.disabled = !hasTrack;
     btnPlayPause.innerHTML = currentIsPlaying ? ICON_PAUSE : ICON_PLAY;
     btnNext.disabled = !hasTrack;
@@ -362,6 +366,22 @@
       });
       if (res.status === 404) { showToast("No hay ningún dispositivo activo"); return; }
       if (!res.ok && res.status !== 204) { showToast("No se pudo saltar la canción"); return; }
+      setTimeout(pollCurrentlyPlaying, 500);
+    } catch {
+      showToast("Error de red");
+    }
+  }
+
+  async function skipPrevious() {
+    const token = await ensureFreshToken();
+    if (!token) { showToast("Conecta tu cuenta de Spotify"); return; }
+    try {
+      const res = await fetch("https://api.spotify.com/v1/me/player/previous", {
+        method: "POST",
+        headers: { Authorization: "Bearer " + token },
+      });
+      if (res.status === 404) { showToast("No hay ningún dispositivo activo"); return; }
+      if (!res.ok && res.status !== 204) { showToast("No se pudo regresar la canción"); return; }
       setTimeout(pollCurrentlyPlaying, 500);
     } catch {
       showToast("Error de red");
@@ -425,12 +445,32 @@
     playlists.forEach((pl, i) => {
       const btn = document.createElement("button");
       btn.className = "pad";
+      btn.dataset.playlistId = pl.id;
       btn.style.background = PAD_COLORS[i % PAD_COLORS.length];
-      btn.innerHTML = `<span>${escapeHtml(pl.name)}</span><span class="pad-check">✓</span>`;
+      btn.innerHTML = `<span>${escapeHtml(pl.name)}</span><span class="pad-check">✓</span><span class="pad-indicator"></span>`;
       btn.addEventListener("click", () => assignToPad(pl, btn));
       padGrid.appendChild(btn);
     });
     setPadsEnabled(!!currentTrackUri);
+    updatePadIndicators();
+    preloadAllPlaylistCaches();
+  }
+
+  // Marks pads whose playlist already contains the currently playing track.
+  // Relies on playlistTrackCache, which preloadAllPlaylistCaches keeps warm
+  // in the background so this never blocks the UI.
+  function updatePadIndicators() {
+    const uri = currentTrackUri;
+    document.querySelectorAll(".pad").forEach((btn) => {
+      const cache = playlistTrackCache[btn.dataset.playlistId];
+      btn.classList.toggle("pad-added", !!(uri && cache && cache.has(uri)));
+    });
+  }
+
+  async function preloadAllPlaylistCaches() {
+    const playlists = loadPlaylists();
+    await Promise.all(playlists.map((pl) => getPlaylistTrackUris(pl.id)));
+    updatePadIndicators();
   }
 
   function escapeHtml(s) {
@@ -509,7 +549,7 @@
           if (removeResult.ok && playlistTrackCache[contextId]) playlistTrackCache[contextId].delete(trackUri);
         }
 
-        await skipNext();
+        updatePadIndicators();
         return;
       }
 
@@ -743,6 +783,7 @@
 
   // ---------- Wire up ----------
   el("btn-connect").addEventListener("click", login);
+  btnPrev.addEventListener("click", skipPrevious);
   btnPlayPause.addEventListener("click", togglePlayPause);
   btnNext.addEventListener("click", skipNext);
   btnRemoveCurrent.addEventListener("click", removeCurrentFromPlaylist);
