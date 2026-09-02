@@ -86,6 +86,10 @@
       <button id="btn-pick-playlists" class="btn btn-small btn-outline">Elegir de Spotify</button>
     </div>
 
+    <div class="row-buttons">
+      <button id="btn-open-bulk-sort" class="btn btn-small btn-outline">Clasificación masiva</button>
+    </div>
+
     <label class="field-label">Automatización</label>
     <div class="switch-row">
       <div class="switch-row-text">
@@ -117,6 +121,34 @@
       <button id="btn-picker-confirm" class="btn btn-primary">Usar seleccionadas</button>
       <button id="btn-picker-cancel" class="btn btn-text">Cancelar</button>
     </div>
+  </div>
+</div>
+
+<!-- Bulk sort sheet -->
+<div id="bulk-overlay" class="hidden">
+  <div id="bulk-sheet">
+    <div class="sheet-handle"></div>
+    <h2>Clasificación masiva</h2>
+    <p class="connect-copy bulk-intro">Vacía tu playlist "Todo" hacia tus playlists configuradas usando clasificacion.json.</p>
+
+    <label class="field-label" for="input-bulk-source">Link o ID de la playlist "Todo"</label>
+    <input id="input-bulk-source" type="text" placeholder="Link o ID de la playlist" autocapitalize="off" autocorrect="off" spellcheck="false" />
+
+    <div class="row-buttons">
+      <button id="btn-bulk-load-json" class="btn btn-small btn-outline">Cargar clasificación.json</button>
+    </div>
+
+    <div id="bulk-summary" class="hidden"></div>
+    <div id="bulk-progress" class="hidden">
+      <div id="bulk-progress-text">0 / 0</div>
+      <div id="bulk-progress-bar"><div id="bulk-progress-fill"></div></div>
+    </div>
+    <div id="bulk-result" class="hidden"></div>
+
+    <div class="sheet-actions">
+      <button id="btn-bulk-confirm" class="btn btn-primary hidden">Confirmar y mover</button>
+    </div>
+    <button id="btn-close-bulk" class="btn btn-text">Cerrar</button>
   </div>
 </div>
 

@@ -44,6 +44,16 @@
   const pickerStatus = el("picker-status");
   const pickerList = el("picker-list");
 
+  const bulkOverlay = el("bulk-overlay");
+  const inputBulkSource = el("input-bulk-source");
+  const btnBulkLoadJson = el("btn-bulk-load-json");
+  const bulkSummary = el("bulk-summary");
+  const bulkProgress = el("bulk-progress");
+  const bulkProgressText = el("bulk-progress-text");
+  const bulkProgressFill = el("bulk-progress-fill");
+  const bulkResult = el("bulk-result");
+  const btnBulkConfirm = el("btn-bulk-confirm");
+
   const btnPrev = el("btn-prev");
   const btnPlayPause = el("btn-playpause");
   const btnNext = el("btn-next");
@@ -55,6 +65,11 @@
   let lastReportedAt = 0;
   let pollTimer = null;
   const playlistTrackCache = {};
+
+  let bulkPlan = []; // [{ uri, trackName, targetId, targetName }]
+  let bulkNotFound = {}; // targetName -> count (named in JSON but no matching configured playlist)
+  let bulkSourceId = "";
+  let bulkRunning = false;
 
   // ---------- Helpers ----------
   function getRedirectUri() {
@@ -89,6 +104,10 @@
     if (m) return m[1];
     if (/^[a-zA-Z0-9]{15,30}$/.test(trimmed)) return trimmed;
     return trimmed;
+  }
+
+  function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   function showToast(msg) {
@@ -781,6 +800,292 @@
     showToast("Guardado");
   }
 
+  // ---------- Bulk sort ----------
+  // Reads clasificacion.json (spotify:track:uri -> exact playlist name) and,
+  // for every track that's both in that file AND currently in the source
+  // "Todo" playlist AND maps to one of the user's already-configured
+  // playlists, moves it: POST to the target, then DELETE from the source.
+  // Tracks missing from the file are never touched.
+
+  async function fetchClassificationJson() {
+    const res = await fetch("./clasificacion.json");
+    if (!res.ok) throw new Error("No se pudo leer clasificacion.json (" + res.status + ")");
+    return await res.json();
+  }
+
+  async function fetchPlaylistTracksDetailed(playlistId) {
+    const token = await ensureFreshToken();
+    if (!token) return null;
+
+    const map = new Map(); // uri -> "Track name — Artist"
+    let url = `https://api.spotify.com/v1/playlists/${playlistId}/items?limit=50`;
+
+    try {
+      while (url) {
+        const res = await fetch(url, { headers: { Authorization: "Bearer " + token } });
+        if (!res.ok) return null;
+        const data = await res.json();
+        (data.items || []).forEach((entry) => {
+          const track = entry.item || entry.track;
+          if (!track || !track.uri) return;
+          const artists = (track.artists || []).map((a) => a.name).join(", ");
+          map.set(track.uri, artists ? `${track.name} — ${artists}` : (track.name || track.uri));
+        });
+        url = data.next || null;
+      }
+    } catch {
+      return null;
+    }
+    return map;
+  }
+
+  async function bulkAddTrack(playlistId, trackUri, attempt = 0) {
+    const token = await ensureFreshToken();
+    if (!token) return { ok: false, reason: "no se pudo autenticar" };
+    try {
+      const res = await fetch(`https://api.spotify.com/v1/playlists/${playlistId}/items`, {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer " + token,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ uris: [trackUri] }),
+      });
+      if (res.status === 201) return { ok: true };
+      if (res.status === 401 && attempt < 1) {
+        const fresh = await refreshAccessToken();
+        if (fresh) return bulkAddTrack(playlistId, trackUri, attempt + 1);
+        return { ok: false, reason: "no se pudo autenticar" };
+      }
+      if (res.status === 429 && attempt < 4) {
+        const retryAfter = Number(res.headers.get("Retry-After") || 1);
+        await sleep((retryAfter + 0.2) * 1000);
+        return bulkAddTrack(playlistId, trackUri, attempt + 1);
+      }
+      if (res.status === 403) return { ok: false, reason: "no tienes permiso sobre esa playlist" };
+      const data = await res.json().catch(() => ({}));
+      return { ok: false, reason: (data.error && data.error.message) || ("http " + res.status) };
+    } catch {
+      return { ok: false, reason: "error de red" };
+    }
+  }
+
+  async function bulkDeleteTrack(playlistId, trackUri, attempt = 0) {
+    const token = await ensureFreshToken();
+    if (!token) return { ok: false, reason: "no se pudo autenticar" };
+    try {
+      const res = await fetch(`https://api.spotify.com/v1/playlists/${playlistId}/items`, {
+        method: "DELETE",
+        headers: {
+          Authorization: "Bearer " + token,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ items: [{ uri: trackUri }] }),
+      });
+      if (res.ok) return { ok: true };
+      if (res.status === 401 && attempt < 1) {
+        const fresh = await refreshAccessToken();
+        if (fresh) return bulkDeleteTrack(playlistId, trackUri, attempt + 1);
+        return { ok: false, reason: "no se pudo autenticar" };
+      }
+      if (res.status === 429 && attempt < 4) {
+        const retryAfter = Number(res.headers.get("Retry-After") || 1);
+        await sleep((retryAfter + 0.2) * 1000);
+        return bulkDeleteTrack(playlistId, trackUri, attempt + 1);
+      }
+      if (res.status === 403) return { ok: false, reason: "no tienes permiso sobre esa playlist" };
+      const data = await res.json().catch(() => ({}));
+      return { ok: false, reason: (data.error && data.error.message) || ("http " + res.status) };
+    } catch {
+      return { ok: false, reason: "error de red" };
+    }
+  }
+
+  function openBulkSort() {
+    inputBulkSource.value = "";
+    bulkSummary.classList.add("hidden");
+    bulkSummary.innerHTML = "";
+    bulkResult.classList.add("hidden");
+    bulkResult.innerHTML = "";
+    bulkProgress.classList.add("hidden");
+    btnBulkConfirm.classList.add("hidden");
+    bulkPlan = [];
+    bulkNotFound = {};
+    bulkSourceId = "";
+    bulkOverlay.classList.remove("hidden");
+  }
+
+  function closeBulkSort() {
+    if (bulkRunning) { showToast("Espera a que termine de mover las canciones"); return; }
+    bulkOverlay.classList.add("hidden");
+  }
+
+  async function handleBulkLoad() {
+    if (bulkRunning) return;
+    const sourceId = extractPlaylistId(inputBulkSource.value);
+    if (!sourceId) { showToast('Pega el link o ID de tu playlist "Todo"'); return; }
+    if (!isLoggedIn()) { showToast("Conecta tu cuenta de Spotify"); return; }
+
+    const originalLabel = btnBulkLoadJson.textContent;
+    btnBulkLoadJson.disabled = true;
+    btnBulkLoadJson.textContent = "Cargando…";
+    bulkSummary.classList.add("hidden");
+    bulkResult.classList.add("hidden");
+    bulkProgress.classList.add("hidden");
+    btnBulkConfirm.classList.add("hidden");
+
+    try {
+      const [classification, todoTracks] = await Promise.all([
+        fetchClassificationJson(),
+        fetchPlaylistTracksDetailed(sourceId),
+      ]);
+
+      if (!todoTracks) {
+        showToast('No se pudo leer la playlist "Todo" — revisa el link/ID');
+        return;
+      }
+
+      const configured = loadPlaylists();
+      const byName = new Map(configured.map((pl) => [pl.name, pl.id]));
+
+      const plan = [];
+      const notFound = {};
+      let inTodoCount = 0;
+
+      Object.keys(classification).forEach((uri) => {
+        if (!todoTracks.has(uri)) return; // not currently in "Todo" — leave it alone entirely
+        inTodoCount++;
+        const targetName = classification[uri];
+        const targetId = byName.get(targetName);
+        if (targetId) {
+          plan.push({ uri, trackName: todoTracks.get(uri) || uri, targetId, targetName });
+        } else {
+          notFound[targetName] = (notFound[targetName] || 0) + 1;
+        }
+      });
+
+      bulkPlan = plan;
+      bulkNotFound = notFound;
+      bulkSourceId = sourceId;
+
+      renderBulkSummary(Object.keys(classification).length, inTodoCount);
+    } catch (e) {
+      showToast("Error al cargar: " + e.message);
+    } finally {
+      btnBulkLoadJson.disabled = false;
+      btnBulkLoadJson.textContent = originalLabel;
+    }
+  }
+
+  function renderBulkSummary(totalInJson, inTodoCount) {
+    const perPlaylist = {};
+    bulkPlan.forEach((item) => {
+      perPlaylist[item.targetName] = (perPlaylist[item.targetName] || 0) + 1;
+    });
+
+    let html = `<div class="bulk-block"><div class="bulk-block-title">${bulkPlan.length} canción(es) se moverán</div>`;
+    html += `<div class="bulk-block-line"><span>En clasificacion.json</span><span>${totalInJson}</span></div>`;
+    html += `<div class="bulk-block-line"><span>Encontradas en "Todo" ahora mismo</span><span>${inTodoCount}</span></div>`;
+    Object.keys(perPlaylist).sort().forEach((name) => {
+      html += `<div class="bulk-block-line"><span>${escapeHtml(name)}</span><span>${perPlaylist[name]}</span></div>`;
+    });
+    html += `</div>`;
+
+    const notFoundNames = Object.keys(bulkNotFound);
+    if (notFoundNames.length > 0) {
+      const notFoundTotal = notFoundNames.reduce((sum, n) => sum + bulkNotFound[n], 0);
+      html += `<div class="bulk-block"><div class="bulk-block-title bulk-warn">Playlist no encontrada — no se moverán ${notFoundTotal} canción(es)</div>`;
+      notFoundNames.sort().forEach((name) => {
+        html += `<div class="bulk-block-line"><span>${escapeHtml(name)}</span><span>${bulkNotFound[name]}</span></div>`;
+      });
+      html += `</div>`;
+    }
+
+    bulkSummary.innerHTML = html;
+    bulkSummary.classList.remove("hidden");
+    btnBulkConfirm.classList.toggle("hidden", bulkPlan.length === 0);
+    if (bulkPlan.length === 0) showToast("No hay canciones para mover con la configuración actual");
+  }
+
+  function updateBulkProgress(done, total) {
+    bulkProgressText.textContent = `${done} / ${total}`;
+    bulkProgressFill.style.width = total ? `${(done / total) * 100}%` : "0%";
+  }
+
+  async function handleBulkConfirm() {
+    if (bulkRunning || bulkPlan.length === 0) return;
+    bulkRunning = true;
+    btnBulkConfirm.classList.add("hidden");
+    btnBulkLoadJson.disabled = true;
+    bulkResult.classList.add("hidden");
+    bulkResult.innerHTML = "";
+    bulkProgress.classList.remove("hidden");
+
+    const total = bulkPlan.length;
+    let done = 0;
+    let succeeded = 0;
+    const addFailed = [];
+    const removeFailed = [];
+
+    updateBulkProgress(done, total);
+
+    for (const item of bulkPlan) {
+      const addRes = await bulkAddTrack(item.targetId, item.uri);
+      if (addRes.ok) {
+        if (playlistTrackCache[item.targetId]) playlistTrackCache[item.targetId].add(item.uri);
+
+        const delRes = await bulkDeleteTrack(bulkSourceId, item.uri);
+        if (delRes.ok) {
+          succeeded++;
+          if (playlistTrackCache[bulkSourceId]) playlistTrackCache[bulkSourceId].delete(item.uri);
+        } else {
+          removeFailed.push({ trackName: item.trackName, error: delRes.reason });
+        }
+      } else {
+        addFailed.push({ trackName: item.trackName, error: addRes.reason });
+      }
+      done++;
+      updateBulkProgress(done, total);
+      await sleep(150);
+    }
+
+    bulkRunning = false;
+    btnBulkLoadJson.disabled = false;
+    renderBulkResult(succeeded, addFailed, removeFailed);
+    updatePadIndicators();
+  }
+
+  function renderBulkResult(succeeded, addFailed, removeFailed) {
+    const notFoundTotal = Object.values(bulkNotFound).reduce((a, b) => a + b, 0);
+
+    let html = `<div class="bulk-block"><div class="bulk-block-title">Listo</div>`;
+    html += `<div class="bulk-block-line"><span>Movidas con éxito</span><span>${succeeded}</span></div>`;
+    html += `<div class="bulk-block-line"><span>Fallaron</span><span>${addFailed.length + removeFailed.length}</span></div>`;
+    html += `<div class="bulk-block-line"><span>Saltadas (playlist no encontrada)</span><span>${notFoundTotal}</span></div>`;
+    html += `</div>`;
+
+    if (addFailed.length > 0) {
+      html += `<div class="bulk-block"><div class="bulk-block-title bulk-warn">No se pudieron agregar (siguen en "Todo")</div>`;
+      addFailed.forEach((f) => {
+        html += `<div class="bulk-fail-item"><b>${escapeHtml(f.trackName)}</b><br>${escapeHtml(f.error)}</div>`;
+      });
+      html += `</div>`;
+    }
+
+    if (removeFailed.length > 0) {
+      html += `<div class="bulk-block"><div class="bulk-block-title bulk-warn">Se agregaron pero no se pudieron quitar de "Todo"</div>`;
+      removeFailed.forEach((f) => {
+        html += `<div class="bulk-fail-item"><b>${escapeHtml(f.trackName)}</b><br>${escapeHtml(f.error)}</div>`;
+      });
+      html += `</div>`;
+    }
+
+    bulkResult.innerHTML = html;
+    bulkResult.classList.remove("hidden");
+    bulkProgress.classList.add("hidden");
+    showToast(`Listo: ${succeeded} movidas, ${addFailed.length + removeFailed.length} con error`);
+  }
+
   // ---------- Wire up ----------
   el("btn-connect").addEventListener("click", login);
   btnPrev.addEventListener("click", skipPrevious);
@@ -814,6 +1119,11 @@
   settingsOverlay.addEventListener("click", (e) => {
     if (e.target === settingsOverlay) closeSettings();
   });
+  el("btn-open-bulk-sort").addEventListener("click", openBulkSort);
+  el("btn-close-bulk").addEventListener("click", closeBulkSort);
+  btnBulkLoadJson.addEventListener("click", handleBulkLoad);
+  btnBulkConfirm.addEventListener("click", handleBulkConfirm);
+  bulkOverlay.addEventListener("click", (e) => { if (e.target === bulkOverlay) closeBulkSort(); });
 
   // ---------- Init ----------
   (async function init() {
