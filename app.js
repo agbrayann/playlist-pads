@@ -825,9 +825,9 @@
     return await res.json();
   }
 
-  async function fetchPlaylistTracksDetailed(playlistId) {
+  async function fetchPlaylistTracksDetailed(playlistId, attempt401 = 0) {
     const token = await ensureFreshToken();
-    if (!token) return null;
+    if (!token) return { ok: false, reason: "no se pudo autenticar — conecta tu cuenta de nuevo" };
 
     const map = new Map(); // uri -> "Track name — Artist"
     let url = `https://api.spotify.com/v1/playlists/${playlistId}/items?limit=50`;
@@ -835,7 +835,25 @@
     try {
       while (url) {
         const res = await fetch(url, { headers: { Authorization: "Bearer " + token } });
-        if (!res.ok) return null;
+
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          console.error("[clasificación masiva] fallo al leer playlist", playlistId, "— status:", res.status, "body:", body);
+
+          if (res.status === 401 && attempt401 < 1) {
+            const fresh = await refreshAccessToken();
+            if (fresh) return fetchPlaylistTracksDetailed(playlistId, attempt401 + 1);
+          }
+
+          const reason =
+            res.status === 401 ? "tu sesión expiró, cierra sesión y vuelve a conectar" :
+            res.status === 403 ? "no tienes permiso para leer esa playlist" :
+            res.status === 404 ? "no se encontró esa playlist — revisa el link/ID" :
+            (body.error && body.error.message) || `Spotify devolvió el error ${res.status}`;
+
+          return { ok: false, reason };
+        }
+
         const data = await res.json();
         (data.items || []).forEach((entry) => {
           const track = entry.item || entry.track;
@@ -845,10 +863,11 @@
         });
         url = data.next || null;
       }
-    } catch {
-      return null;
+    } catch (e) {
+      console.error("[clasificación masiva] error de red al leer playlist", playlistId, e);
+      return { ok: false, reason: "error de red al leer la playlist" };
     }
-    return map;
+    return { ok: true, tracks: map };
   }
 
   async function bulkAddTrack(playlistId, trackUri, onWait = () => {}, attempt401 = 0, attempt429 = 0) {
@@ -953,15 +972,16 @@
     btnBulkConfirm.classList.add("hidden");
 
     try {
-      const [classification, todoTracks] = await Promise.all([
+      const [classification, todoResult] = await Promise.all([
         fetchClassificationJson(),
         fetchPlaylistTracksDetailed(sourceId),
       ]);
 
-      if (!todoTracks) {
-        showToast('No se pudo leer la playlist "Todo" — revisa el link/ID');
+      if (!todoResult.ok) {
+        showToast(`No se pudo leer la playlist "Todo": ${todoResult.reason}`);
         return;
       }
+      const todoTracks = todoResult.tracks;
 
       const configured = loadPlaylists();
       const byName = new Map(configured.map((pl) => [pl.name, pl.id]));
