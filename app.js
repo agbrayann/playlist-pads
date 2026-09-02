@@ -110,6 +110,18 @@
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
+  // Waits (seconds + 1s buffer), calling onTick(secondsRemaining) roughly
+  // once per second so the caller can keep a progress UI from looking stuck.
+  async function waitForRetryAfter(seconds, onTick) {
+    let remainingMs = Math.max(0, (seconds + 1) * 1000);
+    while (remainingMs > 0) {
+      onTick(Math.ceil(remainingMs / 1000));
+      const step = Math.min(1000, remainingMs);
+      await sleep(step);
+      remainingMs -= step;
+    }
+  }
+
   function showToast(msg) {
     toastEl.textContent = msg;
     toastEl.classList.add("show");
@@ -839,7 +851,7 @@
     return map;
   }
 
-  async function bulkAddTrack(playlistId, trackUri, attempt = 0) {
+  async function bulkAddTrack(playlistId, trackUri, onWait = () => {}, attempt401 = 0, attempt429 = 0) {
     const token = await ensureFreshToken();
     if (!token) return { ok: false, reason: "no se pudo autenticar" };
     try {
@@ -852,15 +864,18 @@
         body: JSON.stringify({ uris: [trackUri] }),
       });
       if (res.status === 201) return { ok: true };
-      if (res.status === 401 && attempt < 1) {
+      if (res.status === 401 && attempt401 < 1) {
         const fresh = await refreshAccessToken();
-        if (fresh) return bulkAddTrack(playlistId, trackUri, attempt + 1);
+        if (fresh) return bulkAddTrack(playlistId, trackUri, onWait, attempt401 + 1, attempt429);
         return { ok: false, reason: "no se pudo autenticar" };
       }
-      if (res.status === 429 && attempt < 4) {
-        const retryAfter = Number(res.headers.get("Retry-After") || 1);
-        await sleep((retryAfter + 0.2) * 1000);
-        return bulkAddTrack(playlistId, trackUri, attempt + 1);
+      if (res.status === 429) {
+        if (attempt429 < 5) {
+          const retryAfter = Number(res.headers.get("Retry-After")) || 1;
+          await waitForRetryAfter(retryAfter, onWait);
+          return bulkAddTrack(playlistId, trackUri, onWait, attempt401, attempt429 + 1);
+        }
+        return { ok: false, reason: "Spotify limitó las solicitudes (429) tras varios reintentos" };
       }
       if (res.status === 403) return { ok: false, reason: "no tienes permiso sobre esa playlist" };
       const data = await res.json().catch(() => ({}));
@@ -870,7 +885,7 @@
     }
   }
 
-  async function bulkDeleteTrack(playlistId, trackUri, attempt = 0) {
+  async function bulkDeleteTrack(playlistId, trackUri, onWait = () => {}, attempt401 = 0, attempt429 = 0) {
     const token = await ensureFreshToken();
     if (!token) return { ok: false, reason: "no se pudo autenticar" };
     try {
@@ -883,15 +898,18 @@
         body: JSON.stringify({ items: [{ uri: trackUri }] }),
       });
       if (res.ok) return { ok: true };
-      if (res.status === 401 && attempt < 1) {
+      if (res.status === 401 && attempt401 < 1) {
         const fresh = await refreshAccessToken();
-        if (fresh) return bulkDeleteTrack(playlistId, trackUri, attempt + 1);
+        if (fresh) return bulkDeleteTrack(playlistId, trackUri, onWait, attempt401 + 1, attempt429);
         return { ok: false, reason: "no se pudo autenticar" };
       }
-      if (res.status === 429 && attempt < 4) {
-        const retryAfter = Number(res.headers.get("Retry-After") || 1);
-        await sleep((retryAfter + 0.2) * 1000);
-        return bulkDeleteTrack(playlistId, trackUri, attempt + 1);
+      if (res.status === 429) {
+        if (attempt429 < 5) {
+          const retryAfter = Number(res.headers.get("Retry-After")) || 1;
+          await waitForRetryAfter(retryAfter, onWait);
+          return bulkDeleteTrack(playlistId, trackUri, onWait, attempt401, attempt429 + 1);
+        }
+        return { ok: false, reason: "Spotify limitó las solicitudes (429) tras varios reintentos" };
       }
       if (res.status === 403) return { ok: false, reason: "no tienes permiso sobre esa playlist" };
       const data = await res.json().catch(() => ({}));
@@ -1030,11 +1048,15 @@
     updateBulkProgress(done, total);
 
     for (const item of bulkPlan) {
-      const addRes = await bulkAddTrack(item.targetId, item.uri);
+      const onWait = (remaining) => {
+        bulkProgressText.textContent = `${done} / ${total} — Esperando por límite de Spotify… reintenta en ${remaining}s`;
+      };
+
+      const addRes = await bulkAddTrack(item.targetId, item.uri, onWait);
       if (addRes.ok) {
         if (playlistTrackCache[item.targetId]) playlistTrackCache[item.targetId].add(item.uri);
 
-        const delRes = await bulkDeleteTrack(bulkSourceId, item.uri);
+        const delRes = await bulkDeleteTrack(bulkSourceId, item.uri, onWait);
         if (delRes.ok) {
           succeeded++;
           if (playlistTrackCache[bulkSourceId]) playlistTrackCache[bulkSourceId].delete(item.uri);
@@ -1046,7 +1068,7 @@
       }
       done++;
       updateBulkProgress(done, total);
-      await sleep(150);
+      await sleep(400);
     }
 
     bulkRunning = false;
