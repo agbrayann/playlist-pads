@@ -70,6 +70,7 @@
   let bulkNotFound = {}; // targetName -> count (named in JSON but no matching configured playlist)
   let bulkSourceId = "";
   let bulkRunning = false;
+  let bulkLoadInFlight = false;
 
   // ---------- Helpers ----------
   function getRedirectUri() {
@@ -119,6 +120,52 @@
       const step = Math.min(1000, remainingMs);
       await sleep(step);
       remainingMs -= step;
+    }
+  }
+
+  // Fetches one playlist-items page, retrying on 401 (refresh token, once)
+  // and on 429 (wait for Retry-After + 1s buffer, up to 5 times). Shared by
+  // every playlist-reading path so none of them can hammer Spotify unchecked.
+  async function fetchPlaylistPage(url, onWait = () => {}) {
+    let attempt401 = 0;
+    let attempt429 = 0;
+    for (;;) {
+      const token = await ensureFreshToken();
+      if (!token) return { ok: false, reason: "no se pudo autenticar — conecta tu cuenta de nuevo" };
+
+      let res;
+      try {
+        res = await fetch(url, { headers: { Authorization: "Bearer " + token } });
+      } catch {
+        return { ok: false, reason: "error de red" };
+      }
+
+      if (res.ok) return { ok: true, data: await res.json() };
+
+      if (res.status === 401 && attempt401 < 1) {
+        attempt401++;
+        const fresh = await refreshAccessToken();
+        if (!fresh) return { ok: false, reason: "tu sesión expiró, cierra sesión y vuelve a conectar" };
+        continue;
+      }
+
+      if (res.status === 429 && attempt429 < 5) {
+        attempt429++;
+        const retryAfter = Number(res.headers.get("Retry-After")) || 1;
+        console.warn("[rate limit] 429 en", url, "— reintento", attempt429, "de 5, esperando", retryAfter + 1, "s");
+        await waitForRetryAfter(retryAfter, onWait);
+        continue;
+      }
+
+      const body = await res.json().catch(() => ({}));
+      console.error("[playlist fetch] fallo en", url, "— status:", res.status, "body:", body);
+      const reason =
+        res.status === 401 ? "tu sesión expiró, cierra sesión y vuelve a conectar" :
+        res.status === 403 ? "no tienes permiso para leer esa playlist" :
+        res.status === 404 ? "no se encontró esa playlist — revisa el link/ID" :
+        res.status === 429 ? "Spotify limitó las solicitudes (429) tras varios reintentos" :
+        (body.error && body.error.message) || `Spotify devolvió el error ${res.status}`;
+      return { ok: false, reason };
     }
   }
 
@@ -498,10 +545,15 @@
     });
   }
 
+  // One playlist at a time, with a pause in between, so warming the pad-dot
+  // cache for N configured playlists never bursts N parallel reads at Spotify.
   async function preloadAllPlaylistCaches() {
     const playlists = loadPlaylists();
-    await Promise.all(playlists.map((pl) => getPlaylistTrackUris(pl.id)));
-    updatePadIndicators();
+    for (const pl of playlists) {
+      await getPlaylistTrackUris(pl.id);
+      updatePadIndicators();
+      await sleep(400);
+    }
   }
 
   function escapeHtml(s) {
@@ -516,25 +568,20 @@
   async function getPlaylistTrackUris(playlistId) {
     if (playlistTrackCache[playlistId]) return playlistTrackCache[playlistId];
 
-    const token = await ensureFreshToken();
-    if (!token) return null;
-
     const uris = new Set();
     let url = `https://api.spotify.com/v1/playlists/${playlistId}/items?limit=50`;
 
-    try {
-      while (url) {
-        const res = await fetch(url, { headers: { Authorization: "Bearer " + token } });
-        if (!res.ok) return null;
-        const data = await res.json();
-        (data.items || []).forEach((entry) => {
-          const uri = (entry.item && entry.item.uri) || (entry.track && entry.track.uri);
-          if (uri) uris.add(uri);
-        });
-        url = data.next || null;
+    while (url) {
+      const page = await fetchPlaylistPage(url);
+      if (!page.ok) {
+        console.error("[pads] no se pudo leer playlist", playlistId, "—", page.reason);
+        return null;
       }
-    } catch {
-      return null;
+      (page.data.items || []).forEach((entry) => {
+        const uri = (entry.item && entry.item.uri) || (entry.track && entry.track.uri);
+        if (uri) uris.add(uri);
+      });
+      url = page.data.next || null;
     }
 
     playlistTrackCache[playlistId] = uris;
@@ -825,47 +872,21 @@
     return await res.json();
   }
 
-  async function fetchPlaylistTracksDetailed(playlistId, attempt401 = 0) {
-    const token = await ensureFreshToken();
-    if (!token) return { ok: false, reason: "no se pudo autenticar — conecta tu cuenta de nuevo" };
-
+  async function fetchPlaylistTracksDetailed(playlistId, onWait = () => {}) {
     const map = new Map(); // uri -> "Track name — Artist"
     let url = `https://api.spotify.com/v1/playlists/${playlistId}/items?limit=50`;
 
-    try {
-      while (url) {
-        const res = await fetch(url, { headers: { Authorization: "Bearer " + token } });
+    while (url) {
+      const page = await fetchPlaylistPage(url, onWait);
+      if (!page.ok) return { ok: false, reason: page.reason };
 
-        if (!res.ok) {
-          const body = await res.json().catch(() => ({}));
-          console.error("[clasificación masiva] fallo al leer playlist", playlistId, "— status:", res.status, "body:", body);
-
-          if (res.status === 401 && attempt401 < 1) {
-            const fresh = await refreshAccessToken();
-            if (fresh) return fetchPlaylistTracksDetailed(playlistId, attempt401 + 1);
-          }
-
-          const reason =
-            res.status === 401 ? "tu sesión expiró, cierra sesión y vuelve a conectar" :
-            res.status === 403 ? "no tienes permiso para leer esa playlist" :
-            res.status === 404 ? "no se encontró esa playlist — revisa el link/ID" :
-            (body.error && body.error.message) || `Spotify devolvió el error ${res.status}`;
-
-          return { ok: false, reason };
-        }
-
-        const data = await res.json();
-        (data.items || []).forEach((entry) => {
-          const track = entry.item || entry.track;
-          if (!track || !track.uri) return;
-          const artists = (track.artists || []).map((a) => a.name).join(", ");
-          map.set(track.uri, artists ? `${track.name} — ${artists}` : (track.name || track.uri));
-        });
-        url = data.next || null;
-      }
-    } catch (e) {
-      console.error("[clasificación masiva] error de red al leer playlist", playlistId, e);
-      return { ok: false, reason: "error de red al leer la playlist" };
+      (page.data.items || []).forEach((entry) => {
+        const track = entry.item || entry.track;
+        if (!track || !track.uri) return;
+        const artists = (track.artists || []).map((a) => a.name).join(", ");
+        map.set(track.uri, artists ? `${track.name} — ${artists}` : (track.name || track.uri));
+      });
+      url = page.data.next || null;
     }
     return { ok: true, tracks: map };
   }
@@ -958,10 +979,15 @@
   }
 
   async function handleBulkLoad() {
-    if (bulkRunning) return;
+    // Checked synchronously, before any await, so a double-tap that queues a
+    // second click event before the button's `disabled` takes effect can't
+    // slip through and fire this twice in parallel.
+    if (bulkRunning || bulkLoadInFlight) return;
+    bulkLoadInFlight = true;
+
     const sourceId = extractPlaylistId(inputBulkSource.value);
-    if (!sourceId) { showToast('Pega el link o ID de tu playlist "Todo"'); return; }
-    if (!isLoggedIn()) { showToast("Conecta tu cuenta de Spotify"); return; }
+    if (!sourceId) { showToast('Pega el link o ID de tu playlist "Todo"'); bulkLoadInFlight = false; return; }
+    if (!isLoggedIn()) { showToast("Conecta tu cuenta de Spotify"); bulkLoadInFlight = false; return; }
 
     const originalLabel = btnBulkLoadJson.textContent;
     btnBulkLoadJson.disabled = true;
@@ -971,10 +997,14 @@
     bulkProgress.classList.add("hidden");
     btnBulkConfirm.classList.add("hidden");
 
+    const onWait = (remaining) => {
+      btnBulkLoadJson.textContent = `Esperando límite de Spotify… ${remaining}s`;
+    };
+
     try {
       const [classification, todoResult] = await Promise.all([
         fetchClassificationJson(),
-        fetchPlaylistTracksDetailed(sourceId),
+        fetchPlaylistTracksDetailed(sourceId, onWait),
       ]);
 
       if (!todoResult.ok) {
@@ -1012,6 +1042,7 @@
     } finally {
       btnBulkLoadJson.disabled = false;
       btnBulkLoadJson.textContent = originalLabel;
+      bulkLoadInFlight = false;
     }
   }
 
