@@ -18,6 +18,12 @@
     removeOnAssign: "pp_remove_on_assign",
   };
 
+  // A 429 with this reason is Spotify's daily developer-app quota, not a
+  // short-lived rate limit — waiting and retrying never helps, so every
+  // function that calls the Spotify API checks for it and bails immediately
+  // instead of burning retries against a quota that won't reset for hours.
+  const QUOTA_EXCEEDED_MESSAGE = "Se agotó la cuota diaria de la API de Spotify. Intenta de nuevo más tarde (usualmente se resetea en 24 horas).";
+
   const ICON_PLAY = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>';
   const ICON_PAUSE = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>';
 
@@ -123,9 +129,17 @@
     }
   }
 
+  // True when a 429's body identifies Spotify's daily quota, not a
+  // short-lived burst limit — see QUOTA_EXCEEDED_MESSAGE above.
+  function isQuotaExceeded(body) {
+    return !!(body && body.error && body.error.reason === "QUOTA_EXCEEDED");
+  }
+
   // Fetches one playlist-items page, retrying on 401 (refresh token, once)
-  // and on 429 (wait for Retry-After + 1s buffer, up to 5 times). Shared by
-  // every playlist-reading path so none of them can hammer Spotify unchecked.
+  // and on a short-lived 429 (wait for Retry-After + 1s buffer, up to 5
+  // times). A quota-exceeded 429 is never retried — it fails immediately.
+  // Shared by every playlist-reading path so none of them can hammer
+  // Spotify unchecked.
   async function fetchPlaylistPage(url, onWait = () => {}) {
     let attempt401 = 0;
     let attempt429 = 0;
@@ -149,12 +163,21 @@
         continue;
       }
 
-      if (res.status === 429 && attempt429 < 5) {
-        attempt429++;
-        const retryAfter = Number(res.headers.get("Retry-After")) || 1;
-        console.warn("[rate limit] 429 en", url, "— reintento", attempt429, "de 5, esperando", retryAfter + 1, "s");
-        await waitForRetryAfter(retryAfter, onWait);
-        continue;
+      if (res.status === 429) {
+        const body = await res.json().catch(() => ({}));
+        if (isQuotaExceeded(body)) {
+          console.error("[quota] QUOTA_EXCEEDED leyendo", url, "— body:", body);
+          return { ok: false, reason: QUOTA_EXCEEDED_MESSAGE, quotaExceeded: true };
+        }
+        if (attempt429 < 5) {
+          attempt429++;
+          const retryAfter = Number(res.headers.get("Retry-After")) || 1;
+          console.warn("[rate limit] 429 en", url, "— reintento", attempt429, "de 5, esperando", retryAfter + 1, "s");
+          await waitForRetryAfter(retryAfter, onWait);
+          continue;
+        }
+        console.error("[playlist fetch] fallo en", url, "— status: 429 (tras 5 reintentos) — body:", body);
+        return { ok: false, reason: "Spotify limitó las solicitudes (429) tras varios reintentos" };
       }
 
       const body = await res.json().catch(() => ({}));
@@ -163,7 +186,6 @@
         res.status === 401 ? "tu sesión expiró, cierra sesión y vuelve a conectar" :
         res.status === 403 ? "no tienes permiso para leer esa playlist" :
         res.status === 404 ? "no se encontró esa playlist — revisa el link/ID" :
-        res.status === 429 ? "Spotify limitó las solicitudes (429) tras varios reintentos" :
         (body.error && body.error.message) || `Spotify devolvió el error ${res.status}`;
       return { ok: false, reason };
     }
@@ -479,6 +501,11 @@
         body: JSON.stringify({ items: [{ uri: trackUri }] }),
       });
       if (res.status === 403) return { ok: false, reason: "forbidden" };
+      if (res.status === 429) {
+        const body = await res.json().catch(() => ({}));
+        if (isQuotaExceeded(body)) return { ok: false, reason: "quota" };
+        return { ok: false, reason: "error" };
+      }
       if (!res.ok) return { ok: false, reason: "error" };
       return { ok: true };
     } catch {
@@ -493,6 +520,7 @@
       if (result.reason === "auth") showToast("Conecta tu cuenta de Spotify");
       else if (result.reason === "forbidden") showToast("No puedes editar esta playlist");
       else if (result.reason === "network") showToast("Error de red al quitar la canción");
+      else if (result.reason === "quota") showToast(QUOTA_EXCEEDED_MESSAGE);
       else showToast("No se pudo quitar la canción");
       return;
     }
@@ -639,6 +667,10 @@
       }
 
       const data = await res.json().catch(() => ({}));
+      if (res.status === 429 && isQuotaExceeded(data)) {
+        showToast(QUOTA_EXCEEDED_MESSAGE);
+        return;
+      }
       showToast("Error: " + (data.error?.message || res.status));
     } catch (e) {
       showToast("Error de red al agregar la canción");
@@ -878,7 +910,7 @@
 
     while (url) {
       const page = await fetchPlaylistPage(url, onWait);
-      if (!page.ok) return { ok: false, reason: page.reason };
+      if (!page.ok) return { ok: false, reason: page.reason, quotaExceeded: !!page.quotaExceeded };
 
       (page.data.items || []).forEach((entry) => {
         const track = entry.item || entry.track;
@@ -910,6 +942,11 @@
         return { ok: false, reason: "no se pudo autenticar" };
       }
       if (res.status === 429) {
+        const data = await res.json().catch(() => ({}));
+        if (isQuotaExceeded(data)) {
+          console.error("[quota] QUOTA_EXCEEDED agregando a", playlistId, "— body:", data);
+          return { ok: false, reason: QUOTA_EXCEEDED_MESSAGE, quotaExceeded: true };
+        }
         if (attempt429 < 5) {
           const retryAfter = Number(res.headers.get("Retry-After")) || 1;
           await waitForRetryAfter(retryAfter, onWait);
@@ -944,6 +981,11 @@
         return { ok: false, reason: "no se pudo autenticar" };
       }
       if (res.status === 429) {
+        const data = await res.json().catch(() => ({}));
+        if (isQuotaExceeded(data)) {
+          console.error("[quota] QUOTA_EXCEEDED quitando de", playlistId, "— body:", data);
+          return { ok: false, reason: QUOTA_EXCEEDED_MESSAGE, quotaExceeded: true };
+        }
         if (attempt429 < 5) {
           const retryAfter = Number(res.headers.get("Retry-After")) || 1;
           await waitForRetryAfter(retryAfter, onWait);
@@ -957,6 +999,11 @@
     } catch {
       return { ok: false, reason: "error de red" };
     }
+  }
+
+  function quotaExceededHtml() {
+    return `<div class="bulk-block"><div class="bulk-block-title bulk-warn">Cuota diaria agotada</div>` +
+      `<div style="color:var(--text-dim);font-size:12px;line-height:1.4;">${escapeHtml(QUOTA_EXCEEDED_MESSAGE)}</div></div>`;
   }
 
   function openBulkSort() {
@@ -1008,7 +1055,13 @@
       ]);
 
       if (!todoResult.ok) {
-        showToast(`No se pudo leer la playlist "Todo": ${todoResult.reason}`);
+        if (todoResult.quotaExceeded) {
+          bulkSummary.innerHTML = quotaExceededHtml();
+          bulkSummary.classList.remove("hidden");
+          showToast(QUOTA_EXCEEDED_MESSAGE);
+        } else {
+          showToast(`No se pudo leer la playlist "Todo": ${todoResult.reason}`);
+        }
         return;
       }
       const todoTracks = todoResult.tracks;
@@ -1095,6 +1148,7 @@
     let succeeded = 0;
     const addFailed = [];
     const removeFailed = [];
+    let quotaStopped = false;
 
     updateBulkProgress(done, total);
 
@@ -1104,10 +1158,21 @@
       };
 
       const addRes = await bulkAddTrack(item.targetId, item.uri, onWait);
+      if (addRes.quotaExceeded) {
+        quotaStopped = true;
+        break; // Stop the whole batch immediately — don't touch the next song.
+      }
       if (addRes.ok) {
         if (playlistTrackCache[item.targetId]) playlistTrackCache[item.targetId].add(item.uri);
 
         const delRes = await bulkDeleteTrack(bulkSourceId, item.uri, onWait);
+        if (delRes.quotaExceeded) {
+          // The song WAS added to the target but couldn't be removed from
+          // "Todo" — record that plainly, then stop everything.
+          removeFailed.push({ trackName: item.trackName, error: delRes.reason });
+          quotaStopped = true;
+          break;
+        }
         if (delRes.ok) {
           succeeded++;
           if (playlistTrackCache[bulkSourceId]) playlistTrackCache[bulkSourceId].delete(item.uri);
@@ -1124,14 +1189,26 @@
 
     bulkRunning = false;
     btnBulkLoadJson.disabled = false;
-    renderBulkResult(succeeded, addFailed, removeFailed);
+    // "Attempted" items are done, plus the one that triggered the quota stop
+    // (already recorded above) — everything past that never got touched.
+    const attempted = done + (quotaStopped ? 1 : 0);
+    renderBulkResult(succeeded, addFailed, removeFailed, quotaStopped, total - attempted);
     updatePadIndicators();
   }
 
-  function renderBulkResult(succeeded, addFailed, removeFailed) {
+  function renderBulkResult(succeeded, addFailed, removeFailed, quotaStopped = false, remainingUntouched = 0) {
     const notFoundTotal = Object.values(bulkNotFound).reduce((a, b) => a + b, 0);
 
-    let html = `<div class="bulk-block"><div class="bulk-block-title">Listo</div>`;
+    let html = "";
+
+    if (quotaStopped) {
+      html += quotaExceededHtml();
+      html += `<div class="bulk-block"><div class="bulk-block-title bulk-warn">Proceso detenido — sin tocar en "Todo"</div>`;
+      html += `<div class="bulk-block-line"><span>Canciones sin procesar</span><span>${remainingUntouched}</span></div>`;
+      html += `</div>`;
+    }
+
+    html += `<div class="bulk-block"><div class="bulk-block-title">${quotaStopped ? "Resumen parcial" : "Listo"}</div>`;
     html += `<div class="bulk-block-line"><span>Movidas con éxito</span><span>${succeeded}</span></div>`;
     html += `<div class="bulk-block-line"><span>Fallaron</span><span>${addFailed.length + removeFailed.length}</span></div>`;
     html += `<div class="bulk-block-line"><span>Saltadas (playlist no encontrada)</span><span>${notFoundTotal}</span></div>`;
@@ -1156,7 +1233,7 @@
     bulkResult.innerHTML = html;
     bulkResult.classList.remove("hidden");
     bulkProgress.classList.add("hidden");
-    showToast(`Listo: ${succeeded} movidas, ${addFailed.length + removeFailed.length} con error`);
+    showToast(quotaStopped ? QUOTA_EXCEEDED_MESSAGE : `Listo: ${succeeded} movidas, ${addFailed.length + removeFailed.length} con error`);
   }
 
   // ---------- Wire up ----------
